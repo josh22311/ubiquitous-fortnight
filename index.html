@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>File Processor</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen">
+  <div class="bg-white p-6 rounded-xl shadow-xl w-full max-w-lg flex flex-col gap-4">
+
+    <!-- Header -->
+    <h1 class="text-2xl font-bold text-center text-gray-800">File Processor</h1>
+
+    <!-- File Input -->
+    <input
+      type="file"
+      id="fileInput"
+      accept=".txt"
+      class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+    />
+
+    <!-- Process Button -->
+    <button
+      id="processBtn"
+      class="w-full bg-blue-600 text-white py-2 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-gray-300 disabled:cursor-not-allowed"
+    >
+      Process File
+    </button>
+
+    <!-- Domain Selection -->
+    <div id="domainSelection" class="hidden">
+      <h2 class="text-lg font-semibold mb-2 text-gray-700">Select Domains to Include:</h2>
+      <div id="domainCheckboxes" class="flex flex-col gap-2"></div>
+    </div>
+
+    <!-- Download Button -->
+    <button
+      id="downloadBtn"
+      class="w-full bg-green-600 text-white py-2 rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 hidden"
+    >
+      Download Selected
+    </button>
+
+    <!-- Result Box -->
+    <div
+      id="result"
+      class="mt-4 max-h-96 overflow-y-auto bg-gray-50 p-4 rounded-md border border-gray-200 font-mono text-sm"
+    ></div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
