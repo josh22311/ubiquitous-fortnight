@@ -1,0 +1,23 @@
+/* Keep the monospace look and custom tweaks */
+#result {
+  font-family: monospace;
+  white-space: pre-wrap;
+}
+
+/* Disabled button styling (Tailwind already covers bg & cursor) */
+button:disabled {
+  background-color: #d1d5db !important; /* gray-300 */
+  cursor: not-allowed;
+}
+
+/* Small custom tweak for checkbox labels */
+#domainCheckboxes label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Smooth transitions for cards */
+#domainCheckboxes label {
+  transition: background-color 0.15s ease;
+}
