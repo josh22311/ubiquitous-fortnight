@@ -1,13 +1,14 @@
 /* app.js — refreshed version */
 const SUPPORTED_DOMAINS = [
-  "sso.crunchyroll.co", "www.crunchyroll.com", "www.vivamax.net", "com.viva.vivamax",
-  "www.youtube.com", "www.pornhub.com", "www.pornhubpremium.com", "www.brazzers.com",
-  "www.liveatbrazzers.com", "probiller.brazzersnetwork.com", "onlyfans.com",
-  "web.telegram.org", "www.codashop.com", "www.tiktok.com",
-  "com.supercell.clashofclans", "com.supercell.clashroyale",
-  "com.supercell.brawlstars", "com.garena.gaslite", "100082.connect.garena.com",
-  "accountmt.mobilelegends.com", "mtacc.mobilelegends.com",
-  "google.com", "facebook.com"
+  "authgop.garena.com",
+  "sso.garena.com",
+  "100082.connect.garena.com",
+  "100055.connect.garena.com",
+  "100054.connect.garena.com",
+  "auth.garena.com",
+  "account.garena.com",
+  "100072.connect.garena.com",
+  "com.garena.gaslite"
 ];
 
 /* ---------- helpers ---------- */
