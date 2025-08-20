@@ -1,4 +1,4 @@
-/* app.js — refreshed version */
+/* app.js — 800 MB capable, chunked, progress bar, optional dedupe, Garena-only domains */
 const SUPPORTED_DOMAINS = [
   "authgop.garena.com",
   "sso.garena.com",
@@ -15,7 +15,23 @@ const SUPPORTED_DOMAINS = [
 const $ = sel => document.querySelector(sel);
 const $$ = sel => [...document.querySelectorAll(sel)];
 
-/* ---------- main flow ---------- */
+/* ---------- progress bar ---------- */
+function createProgressBar() {
+  const bar = document.createElement('div');
+  bar.id = 'progressBar';
+  bar.style.cssText =
+    'width:0%;height:4px;background:#3b82f6;transition:width .2s;border-radius:2px;margin-bottom:.5rem;';
+  return bar;
+}
+function setProgress(bar, percent) {
+  bar.style.width = `${Math.min(100, percent)}%`;
+}
+function removeProgress() {
+  const bar = $('#progressBar');
+  if (bar) bar.remove();
+}
+
+/* ---------- main click handler ---------- */
 $('#processBtn').addEventListener('click', async () => {
   const fileInput   = $('#fileInput');
   const resultDiv   = $('#result');
@@ -29,127 +45,163 @@ $('#processBtn').addEventListener('click', async () => {
     return;
   }
 
+  const file = fileInput.files[0];
+  if (file.size > 800 * 1024 * 1024) {
+    resultDiv.innerHTML = '<p class="text-red-500">File too big (max 800 MB).</p>';
+    return;
+  }
+
   processBtn.disabled = true;
-  resultDiv.innerHTML = '<p class="text-gray-500">Processing...</p>';
   domainSel.classList.add('hidden');
   downloadBtn.classList.add('hidden');
+  resultDiv.innerHTML = '';
 
-  try {
-    const text  = await fileInput.files[0].text();
-    const lines = text.replace(/\r/g, '').split('\n').filter(l => l.trim());
+  const progress = createProgressBar();
+  resultDiv.appendChild(progress);
 
-    if (!lines.length) {
-      resultDiv.innerHTML = '<p class="text-red-500">File is empty!</p>';
-      return;
-    }
+  /* ---- state ---- */
+  const credsByDomain = Object.fromEntries(SUPPORTED_DOMAINS.map(d => [d, []]));
+  let invalid = 0;
+  const seen = new Set();                       // 🔥 delete this line to disable dedupe
+  const CHUNK = 64 * 1024;                    // 64 kB
+  const decoder = new TextDecoder();
+  let offset = 0;
+  let leftover = '';
 
-    /* ----- parse & bucket ----- */
-    const credsByDomain = Object.fromEntries(SUPPORTED_DOMAINS.map(d => [d, []]));
-    let invalid = 0;
+  while (offset < file.size) {
+    const slice = file.slice(offset, offset + CHUNK);
+    const buf = await slice.arrayBuffer();
+    let text = decoder.decode(buf, { stream: true });
+    text = leftover + text;
+    const lines = text.split('\n');
+    leftover = lines.pop();
 
-    lines.forEach((raw, idx) => {
-      const parts = raw.split(':');
-      if (parts.length < 3) { invalid++; return; }
+    const BATCH = 1000;
+    for (let i = 0; i < lines.length; i += BATCH) {
+      const batch = lines.slice(i, i + BATCH);
+      for (const raw of batch) {
+        const line = raw.trim();
+        if (!line) continue;
+        const parts = line.split(':');
+        if (parts.length < 3) { invalid++; continue; }
 
-      let [url, user, pass] = parts;
-      url  = url.replace(/^https?:\/\//, '').split('/')[0].toLowerCase().trim();
-      user = user.trim();
-      pass = pass.trim();
+        const [rawUrl, user, pass] = parts;
+        const url = rawUrl
+          .replace(/^https?:\/\//i, '')
+          .split('/')[0]
+          .toLowerCase()
+          .trim();
+        const u = user.trim();
+        const p = pass.trim();
+        if (!u || !p || !SUPPORTED_DOMAINS.includes(url)) { invalid++; continue; }
 
-      if (!user || !pass || !url) { invalid++; return; }
-      if (SUPPORTED_DOMAINS.includes(url)) {
-        credsByDomain[url].push({ url, user, pass, index: idx + 1 });
-      } else {
-        invalid++;
+        const key = `${url}:${u}:${p}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        credsByDomain[url].push({ url, user: u, pass: p });
       }
-    });
 
-    const activeDomains = SUPPORTED_DOMAINS.filter(d => credsByDomain[d].length);
-    if (!activeDomains.length) {
-      resultDiv.innerHTML = '<p class="text-red-500">No valid credentials found for supported domains!</p>';
-      return;
+      if ((i + BATCH) % 100_000 === 0) {
+        await new Promise(r => setTimeout(r, 0)); // keep UI alive
+      }
     }
 
-    /* ----- total banner ----- */
-    const totalCreds = activeDomains.reduce((sum, d) => sum + credsByDomain[d].length, 0);
-    const totalBanner = document.createElement('div');
-    totalBanner.className = 'mb-4 text-center text-lg font-semibold';
-    totalBanner.innerHTML = `
-      <span class="bg-blue-100 text-blue-700 px-3 py-1 rounded-full">
-        📦 Total Credentials Found: ${totalCreds}
-      </span>`;
-    checkDiv.innerHTML = '';
-    checkDiv.appendChild(totalBanner);
-
-    /* ----- select / deselect all toggle ----- */
-    const toggleWrap = document.createElement('div');
-    toggleWrap.className = 'mb-3';
-    const toggle = document.createElement('button');
-    toggle.textContent = 'Deselect All';
-    toggle.className = 'text-sm underline text-blue-600 hover:text-blue-800';
-    toggle.addEventListener('click', () => {
-      const checked = $$('.domain-checkbox').some(cb => cb.checked);
-      $$('.domain-checkbox').forEach(cb => cb.checked = !checked);
-      toggle.textContent = checked ? 'Select All' : 'Deselect All';
-      updateResults();
-    });
-    toggleWrap.appendChild(toggle);
-    checkDiv.appendChild(toggleWrap);
-
-    /* ----- domain checkboxes (styled cards) ----- */
-    activeDomains.forEach(domain => {
-      const card = document.createElement('label');
-      card.className = `flex items-center gap-3 p-3 border rounded-lg cursor-pointer
-                        hover:bg-gray-50 transition`;
-      const cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.checked = true;
-      cb.value = domain;
-      cb.className = 'domain-checkbox w-5 h-5 accent-blue-600';
-      card.append(cb, document.createTextNode(`${domain} (${credsByDomain[domain].length})`));
-      checkDiv.appendChild(card);
-    });
-
-    /* ----- live update function ----- */
-    const updateResults = () => {
-      const selected = $$('.domain-checkbox:checked').map(cb => cb.value);
-      let out = '';
-      selected.forEach(d => {
-        credsByDomain[d].forEach(({ url, user, pass, index }) => {
-          out += `Entry ${index}: URL=${url}, User=${user}, Pass=${pass}\n`;
-        });
-      });
-
-      if (invalid) out += `\n⚠️ Skipped ${invalid} invalid/unsupported entries.`;
-      resultDiv.textContent = out || 'No entries selected.';
-      downloadBtn.classList.toggle('hidden', !selected.length);
-    };
-
-    $$('.domain-checkbox').forEach(cb => cb.addEventListener('change', updateResults));
-
-    /* ----- reveal UI ----- */
-    domainSel.classList.remove('hidden');
-    updateResults();
-
-    /* ----- download handler ----- */
-    downloadBtn.onclick = () => {
-      const selected = $$('.domain-checkbox:checked').map(cb => cb.value);
-      const payload = selected.flatMap(d =>
-        credsByDomain[d].map(({ url, user, pass }) => `${url}:${user}:${pass}`)
-      ).join('\n');
-      if (!payload) return;
-      const blob = new Blob([payload], { type: 'text/plain' });
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement('a');
-      a.href     = url;
-      a.download = 'filtered_credentials.txt';
-      a.click();
-      URL.revokeObjectURL(url);
-    };
-
-  } catch (err) {
-    resultDiv.innerHTML = `<p class="text-red-500">Error: ${err.message}</p>`;
-  } finally {
-    processBtn.disabled = false;
+    offset += CHUNK;
+    setProgress(progress, (offset / file.size) * 100);
   }
+
+  /* ---- final leftover line ---- */
+  if (leftover.trim()) {
+    const parts = leftover.trim().split(':');
+    if (parts.length >= 3) {
+      const [rawUrl, user, pass] = parts;
+      const url = rawUrl.replace(/^https?:\/\//i, '').split('/')[0].toLowerCase().trim();
+      const u = user.trim();
+      const p = pass.trim();
+      if (u && p && SUPPORTED_DOMAINS.includes(url)) {
+        const key = `${url}:${u}:${p}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          credsByDomain[url].push({ url, user: u, pass: p });
+        }
+      } else { invalid++; }
+    } else { invalid++; }
+  }
+
+  progress.remove();
+
+  /* ---- UI exactly as before ---- */
+  const activeDomains = SUPPORTED_DOMAINS.filter(d => credsByDomain[d].length);
+  if (!activeDomains.length) {
+    resultDiv.innerHTML = '<p class="text-red-500">No valid credentials found for supported domains!</p>';
+    processBtn.disabled = false;
+    return;
+  }
+
+  const totalCreds = activeDomains.reduce((s, d) => s + credsByDomain[d].length, 0);
+  const banner = document.createElement('div');
+  banner.className = 'mb-4 text-center text-lg font-semibold';
+  banner.innerHTML = `<span class="bg-blue-100 text-blue-700 px-3 py-1 rounded-full">📦 Total Credentials Found: ${totalCreds}</span>`;
+  checkDiv.innerHTML = '';
+  checkDiv.appendChild(banner);
+
+  /* toggle select / deselect all */
+  const toggleWrap = document.createElement('div');
+  toggleWrap.className = 'mb-3';
+  const toggleBtn = document.createElement('button');
+  toggleBtn.textContent = 'Deselect All';
+  toggleBtn.className = 'text-sm underline text-blue-600 hover:text-blue-800';
+  toggleBtn.addEventListener('click', () => {
+    const anyChecked = $$('.domain-checkbox').some(cb => cb.checked);
+    $$('.domain-checkbox').forEach(cb => cb.checked = !anyChecked);
+    toggleBtn.textContent = anyChecked ? 'Select All' : 'Deselect All';
+    updateResults();
+  });
+  toggleWrap.appendChild(toggleBtn);
+  checkDiv.appendChild(toggleWrap);
+
+  /* domain checkboxes */
+  activeDomains.forEach(domain => {
+    const card = document.createElement('label');
+    card.className = 'flex items-center gap-3 p-3 border rounded-lg cursor-pointer hover:bg-gray-50 transition';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = true;
+    cb.value = domain;
+    cb.className = 'domain-checkbox w-5 h-5 accent-blue-600';
+    card.append(cb, document.createTextNode(`${domain} (${credsByDomain[domain].length})`));
+    checkDiv.appendChild(card);
+  });
+
+  const updateResults = () => {
+    const selected = $$('.domain-checkbox:checked').map(cb => cb.value);
+    let out = '';
+    selected.forEach(d => {
+      credsByDomain[d].forEach(({ url, user, pass }) => {
+        out += `${url}:${user}:${pass}\n`;
+      });
+    });
+    if (invalid) out += `\n⚠️ Skipped ${invalid} invalid/unsupported entries.`;
+    resultDiv.textContent = out || 'No entries selected.';
+    downloadBtn.classList.toggle('hidden', !selected.length);
+  };
+  $$('.domain-checkbox').forEach(cb => cb.addEventListener('change', updateResults));
+
+  domainSel.classList.remove('hidden');
+  updateResults();
+
+  downloadBtn.onclick = () => {
+    const selected = $$('.domain-checkbox:checked').map(cb => cb.value);
+    const payload = selected.flatMap(d => credsByDomain[d].map(c => `${c.url}:${c.user}:${c.pass}`)).join('\n');
+    if (!payload) return;
+    const blob = new Blob([payload], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'filtered_credentials.txt';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  processBtn.disabled = false;
 });
