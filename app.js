@@ -1,4 +1,4 @@
-/* app.js — 800 MB capable, chunked, progress bar, optional dedupe, Garena-only domains */
+/* app.js — mobile-safe, 800 MB+, any encoding, Garena-only domains */
 const SUPPORTED_DOMAINS = [
   "authgop.garena.com",
   "sso.garena.com",
@@ -62,11 +62,13 @@ $('#processBtn').addEventListener('click', async () => {
   /* ---- state ---- */
   const credsByDomain = Object.fromEntries(SUPPORTED_DOMAINS.map(d => [d, []]));
   let invalid = 0;
-  const seen = new Set();                       // 🔥 delete this line to disable dedupe
-  const CHUNK = 64 * 1024;                    // 64 kB
-  const decoder = new TextDecoder();
+  const seen = new Set();               // dedupe toggle
+  const CHUNK = 32 * 1024;              // smaller slices for mobile
+  const decoder = new TextDecoder('utf-8', { fatal: false });
+  let fallbackDecoder = null;           // for weird encodings
   let offset = 0;
   let leftover = '';
+  let diagnostic = 0;                   // first 5 bad lines
 
   while (offset < file.size) {
     const slice = file.slice(offset, offset + CHUNK);
@@ -76,53 +78,74 @@ $('#processBtn').addEventListener('click', async () => {
     const lines = text.split('\n');
     leftover = lines.pop();
 
-    const BATCH = 1000;
+    const BATCH = 5000;                 // lighter batches for mobile
     for (let i = 0; i < lines.length; i += BATCH) {
       const batch = lines.slice(i, i + BATCH);
       for (const raw of batch) {
         const line = raw.trim();
         if (!line) continue;
-        const parts = line.split(':');
-        if (parts.length < 3) { invalid++; continue; }
 
-        const [rawUrl, user, pass] = parts;
-        const url = rawUrl
-          .replace(/^https?:\/\//i, '')
-          .split('/')[0]
-          .toLowerCase()
-          .trim();
-        const u = user.trim();
-        const p = pass.trim();
-        if (!u || !p || !SUPPORTED_DOMAINS.includes(url)) { invalid++; continue; }
+        // loose regex: strips protocol, allows spaces/tabs
+        const match = line.match(/^\s*(?:https?:\/\/)?([^:]+):([^:]+):(.+)\s*$/);
+        if (!match) {
+          invalid++;
+          if (diagnostic++ < 5) console.warn('Invalid →', line);
+          continue;
+        }
 
-        const key = `${url}:${u}:${p}`;
+        let [, rawUrl, user, pass] = match;
+        rawUrl = rawUrl.trim();
+        user   = user.trim();
+        pass   = pass.trim();
+
+        // handle encoding issues
+        try {
+          rawUrl = decoder.decode(new TextEncoder().encode(rawUrl));
+          user   = decoder.decode(new TextEncoder().encode(user));
+          pass   = decoder.decode(new TextEncoder().encode(pass));
+        } catch {
+          if (!fallbackDecoder) fallbackDecoder = new TextDecoder('windows-1252');
+          rawUrl = fallbackDecoder.decode(new TextEncoder().encode(rawUrl));
+          user   = fallbackDecoder.decode(new TextEncoder().encode(user));
+          pass   = fallbackDecoder.decode(new TextEncoder().encode(pass));
+        }
+
+        const url = rawUrl.toLowerCase();
+        if (!user || !pass || !SUPPORTED_DOMAINS.includes(url)) {
+          invalid++;
+          if (diagnostic++ < 5) console.warn('Rejected →', line);
+          continue;
+        }
+
+        const key = `${url}:${user}:${pass}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        credsByDomain[url].push({ url, user: u, pass: p });
+        credsByDomain[url].push({ url, user, pass });
       }
 
-      if ((i + BATCH) % 100_000 === 0) {
-        await new Promise(r => setTimeout(r, 0)); // keep UI alive
-      }
+      // keep UI alive on low-end devices
+      if ((i + BATCH) % 50_000 === 0) await new Promise(r => setTimeout(r, 0));
     }
 
     offset += CHUNK;
     setProgress(progress, (offset / file.size) * 100);
   }
 
-  /* ---- final leftover line ---- */
+  /* ---- handle last partial line ---- */
   if (leftover.trim()) {
-    const parts = leftover.trim().split(':');
-    if (parts.length >= 3) {
-      const [rawUrl, user, pass] = parts;
-      const url = rawUrl.replace(/^https?:\/\//i, '').split('/')[0].toLowerCase().trim();
-      const u = user.trim();
-      const p = pass.trim();
-      if (u && p && SUPPORTED_DOMAINS.includes(url)) {
-        const key = `${url}:${u}:${p}`;
+    const line = leftover.trim();
+    const match = line.match(/^\s*(?:https?:\/\/)?([^:]+):([^:]+):(.+)\s*$/);
+    if (match) {
+      let [, rawUrl, user, pass] = match;
+      rawUrl = rawUrl.trim();
+      user   = user.trim();
+      pass   = pass.trim();
+      const url = rawUrl.toLowerCase();
+      if (user && pass && SUPPORTED_DOMAINS.includes(url)) {
+        const key = `${url}:${user}:${pass}`;
         if (!seen.has(key)) {
           seen.add(key);
-          credsByDomain[url].push({ url, user: u, pass: p });
+          credsByDomain[url].push({ url, user, pass });
         }
       } else { invalid++; }
     } else { invalid++; }
@@ -130,7 +153,7 @@ $('#processBtn').addEventListener('click', async () => {
 
   progress.remove();
 
-  /* ---- UI exactly as before ---- */
+  /* ---- identical UI rebuild ---- */
   const activeDomains = SUPPORTED_DOMAINS.filter(d => credsByDomain[d].length);
   if (!activeDomains.length) {
     resultDiv.innerHTML = '<p class="text-red-500">No valid credentials found for supported domains!</p>';
@@ -145,7 +168,6 @@ $('#processBtn').addEventListener('click', async () => {
   checkDiv.innerHTML = '';
   checkDiv.appendChild(banner);
 
-  /* toggle select / deselect all */
   const toggleWrap = document.createElement('div');
   toggleWrap.className = 'mb-3';
   const toggleBtn = document.createElement('button');
@@ -160,7 +182,6 @@ $('#processBtn').addEventListener('click', async () => {
   toggleWrap.appendChild(toggleBtn);
   checkDiv.appendChild(toggleWrap);
 
-  /* domain checkboxes */
   activeDomains.forEach(domain => {
     const card = document.createElement('label');
     card.className = 'flex items-center gap-3 p-3 border rounded-lg cursor-pointer hover:bg-gray-50 transition';
