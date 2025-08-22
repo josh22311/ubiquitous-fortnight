@@ -1,4 +1,4 @@
-/* app.js — mobile-safe, 800 MB+, any encoding, Garena-only domains */
+/* app.js — 15 GB capable, mobile-safe, any encoding, Garena-only domains */
 const SUPPORTED_DOMAINS = [
   "authgop.garena.com",
   "sso.garena.com",
@@ -11,27 +11,20 @@ const SUPPORTED_DOMAINS = [
   "com.garena.gaslite"
 ];
 
-/* ---------- helpers ---------- */
-const $ = sel => document.querySelector(sel);
-const $$ = sel => [...document.querySelectorAll(sel)];
+const $  = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
 
-/* ---------- progress bar ---------- */
-function createProgressBar() {
+/* ---------- progress helpers ---------- */
+const createBar = () => {
   const bar = document.createElement('div');
   bar.id = 'progressBar';
-  bar.style.cssText =
-    'width:0%;height:4px;background:#3b82f6;transition:width .2s;border-radius:2px;margin-bottom:.5rem;';
+  bar.style.cssText = 'width:0%;height:4px;background:#3b82f6;transition:width .2s;border-radius:2px;margin-bottom:.5rem;';
   return bar;
-}
-function setProgress(bar, percent) {
-  bar.style.width = `${Math.min(100, percent)}%`;
-}
-function removeProgress() {
-  const bar = $('#progressBar');
-  if (bar) bar.remove();
-}
+};
+const setProgress = (bar, p) => bar.style.width = `${Math.min(100, p)}%`;
+const killBar = () => $('#progressBar')?.remove();
 
-/* ---------- main click handler ---------- */
+/* ---------- main handler ---------- */
 $('#processBtn').addEventListener('click', async () => {
   const fileInput   = $('#fileInput');
   const resultDiv   = $('#result');
@@ -46,8 +39,8 @@ $('#processBtn').addEventListener('click', async () => {
   }
 
   const file = fileInput.files[0];
-  if (file.size > 800 * 1024 * 1024) {
-    resultDiv.innerHTML = '<p class="text-red-500">File too big (max 800 MB).</p>';
+  if (file.size > 15 * 1024 * 1024 * 1024) {  // 15 GB cap
+    resultDiv.innerHTML = '<p class="text-red-500">File too big (max 15 GB).</p>';
     return;
   }
 
@@ -56,19 +49,19 @@ $('#processBtn').addEventListener('click', async () => {
   downloadBtn.classList.add('hidden');
   resultDiv.innerHTML = '';
 
-  const progress = createProgressBar();
+  const progress = createBar();
   resultDiv.appendChild(progress);
 
-  /* ---- state ---- */
+  /* ---- parser state ---- */
   const credsByDomain = Object.fromEntries(SUPPORTED_DOMAINS.map(d => [d, []]));
   let invalid = 0;
-  const seen = new Set();               // dedupe toggle
-  const CHUNK = 32 * 1024;              // smaller slices for mobile
+  const seen = new Set();                 // dedupe
+  const CHUNK = 16 * 1024;                // 16 kB slices
   const decoder = new TextDecoder('utf-8', { fatal: false });
-  let fallbackDecoder = null;           // for weird encodings
+  let fallback = null;
   let offset = 0;
   let leftover = '';
-  let diagnostic = 0;                   // first 5 bad lines
+  let diag = 0;                           // first 5 bad lines
 
   while (offset < file.size) {
     const slice = file.slice(offset, offset + CHUNK);
@@ -76,95 +69,86 @@ $('#processBtn').addEventListener('click', async () => {
     let text = decoder.decode(buf, { stream: true });
     text = leftover + text;
     const lines = text.split('\n');
-    leftover = lines.pop();
+    leftover = lines.pop();               // last line may be partial
 
-    const BATCH = 5000;                 // lighter batches for mobile
+    const BATCH = 10_000;                 // micro-task size
     for (let i = 0; i < lines.length; i += BATCH) {
       const batch = lines.slice(i, i + BATCH);
       for (const raw of batch) {
         const line = raw.trim();
         if (!line) continue;
 
-        // loose regex: strips protocol, allows spaces/tabs
-        const match = line.match(/^\s*(?:https?:\/\/)?([^:]+):([^:]+):(.+)\s*$/);
-        if (!match) {
-          invalid++;
-          if (diagnostic++ < 5) console.warn('Invalid →', line);
-          continue;
-        }
+        // loose regex strips protocol, allows extra spaces
+        const m = line.match(/^\s*(?:https?:\/\/)?([^:]+):([^:]+):(.+)\s*$/);
+        if (!m) { invalid++; if (diag++ < 5) console.warn('Invalid →', line); continue; }
 
-        let [, rawUrl, user, pass] = match;
-        rawUrl = rawUrl.trim();
-        user   = user.trim();
-        pass   = pass.trim();
+        let [, host, user, pass] = m;
+        host = host.trim().toLowerCase();
+        user = user.trim();
+        pass = pass.trim();
 
-        // handle encoding issues
+        // encoding fix
         try {
-          rawUrl = decoder.decode(new TextEncoder().encode(rawUrl));
-          user   = decoder.decode(new TextEncoder().encode(user));
-          pass   = decoder.decode(new TextEncoder().encode(pass));
+          host = decoder.decode(new TextEncoder().encode(host));
+          user = decoder.decode(new TextEncoder().encode(user));
+          pass = decoder.decode(new TextEncoder().encode(pass));
         } catch {
-          if (!fallbackDecoder) fallbackDecoder = new TextDecoder('windows-1252');
-          rawUrl = fallbackDecoder.decode(new TextEncoder().encode(rawUrl));
-          user   = fallbackDecoder.decode(new TextEncoder().encode(user));
-          pass   = fallbackDecoder.decode(new TextEncoder().encode(pass));
+          if (!fallback) fallback = new TextDecoder('windows-1252');
+          host = fallback.decode(new TextEncoder().encode(host));
+          user = fallback.decode(new TextEncoder().encode(user));
+          pass = fallback.decode(new TextEncoder().encode(pass));
         }
 
-        const url = rawUrl.toLowerCase();
-        if (!user || !pass || !SUPPORTED_DOMAINS.includes(url)) {
-          invalid++;
-          if (diagnostic++ < 5) console.warn('Rejected →', line);
-          continue;
+        if (!user || !pass || !SUPPORTED_DOMAINS.includes(host)) {
+          invalid++; if (diag++ < 5) console.warn('Rejected →', line); continue;
         }
 
-        const key = `${url}:${user}:${pass}`;
+        const key = `${host}:${user}:${pass}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        credsByDomain[url].push({ url, user, pass });
+        credsByDomain[host].push({ url: host, user, pass });
       }
 
-      // keep UI alive on low-end devices
-      if ((i + BATCH) % 50_000 === 0) await new Promise(r => setTimeout(r, 0));
+      // keep UI responsive
+      await new Promise(r => setTimeout(r, 0));
     }
 
     offset += CHUNK;
     setProgress(progress, (offset / file.size) * 100);
   }
 
-  /* ---- handle last partial line ---- */
+  /* ---- final partial line ---- */
   if (leftover.trim()) {
-    const line = leftover.trim();
-    const match = line.match(/^\s*(?:https?:\/\/)?([^:]+):([^:]+):(.+)\s*$/);
-    if (match) {
-      let [, rawUrl, user, pass] = match;
-      rawUrl = rawUrl.trim();
-      user   = user.trim();
-      pass   = pass.trim();
-      const url = rawUrl.toLowerCase();
-      if (user && pass && SUPPORTED_DOMAINS.includes(url)) {
-        const key = `${url}:${user}:${pass}`;
+    const m = leftover.trim().match(/^\s*(?:https?:\/\/)?([^:]+):([^:]+):(.+)\s*$/);
+    if (m) {
+      let [, host, user, pass] = m;
+      host = host.trim().toLowerCase();
+      user = user.trim();
+      pass = pass.trim();
+      if (user && pass && SUPPORTED_DOMAINS.includes(host)) {
+        const key = `${host}:${user}:${pass}`;
         if (!seen.has(key)) {
           seen.add(key);
-          credsByDomain[url].push({ url, user, pass });
+          credsByDomain[host].push({ url: host, user, pass });
         }
       } else { invalid++; }
     } else { invalid++; }
   }
 
-  progress.remove();
+  killBar();
 
-  /* ---- identical UI rebuild ---- */
+  /* ---- UI rebuild (same as before) ---- */
   const activeDomains = SUPPORTED_DOMAINS.filter(d => credsByDomain[d].length);
   if (!activeDomains.length) {
-    resultDiv.innerHTML = '<p class="text-red-500">No valid credentials found for supported domains!</p>';
+    resultDiv.innerHTML = `<p class="text-red-500">No valid credentials found.<br>Check console for rejected lines.</p>`;
     processBtn.disabled = false;
     return;
   }
 
-  const totalCreds = activeDomains.reduce((s, d) => s + credsByDomain[d].length, 0);
+  const total = activeDomains.reduce((s, d) => s + credsByDomain[d].length, 0);
   const banner = document.createElement('div');
   banner.className = 'mb-4 text-center text-lg font-semibold';
-  banner.innerHTML = `<span class="bg-blue-100 text-blue-700 px-3 py-1 rounded-full">📦 Total Credentials Found: ${totalCreds}</span>`;
+  banner.innerHTML = `<span class="bg-blue-100 text-blue-700 px-3 py-1 rounded-full">📦 Total: ${total}</span>`;
   checkDiv.innerHTML = '';
   checkDiv.appendChild(banner);
 
@@ -173,25 +157,25 @@ $('#processBtn').addEventListener('click', async () => {
   const toggleBtn = document.createElement('button');
   toggleBtn.textContent = 'Deselect All';
   toggleBtn.className = 'text-sm underline text-blue-600 hover:text-blue-800';
-  toggleBtn.addEventListener('click', () => {
-    const anyChecked = $$('.domain-checkbox').some(cb => cb.checked);
-    $$('.domain-checkbox').forEach(cb => cb.checked = !anyChecked);
-    toggleBtn.textContent = anyChecked ? 'Select All' : 'Deselect All';
+  toggleBtn.onclick = () => {
+    const any = $$('.domain-checkbox').some(c => c.checked);
+    $$('.domain-checkbox').forEach(c => c.checked = !any);
+    toggleBtn.textContent = any ? 'Select All' : 'Deselect All';
     updateResults();
-  });
+  };
   toggleWrap.appendChild(toggleBtn);
   checkDiv.appendChild(toggleWrap);
 
   activeDomains.forEach(domain => {
-    const card = document.createElement('label');
-    card.className = 'flex items-center gap-3 p-3 border rounded-lg cursor-pointer hover:bg-gray-50 transition';
+    const label = document.createElement('label');
+    label.className = 'flex items-center gap-3 p-3 border rounded-lg cursor-pointer hover:bg-gray-50 transition';
     const cb = document.createElement('input');
     cb.type = 'checkbox';
     cb.checked = true;
     cb.value = domain;
     cb.className = 'domain-checkbox w-5 h-5 accent-blue-600';
-    card.append(cb, document.createTextNode(`${domain} (${credsByDomain[domain].length})`));
-    checkDiv.appendChild(card);
+    label.append(cb, `${domain} (${credsByDomain[domain].length})`);
+    checkDiv.appendChild(label);
   });
 
   const updateResults = () => {
