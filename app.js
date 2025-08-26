@@ -1,15 +1,28 @@
 /* app.js — 15 GB capable, mobile-safe, any encoding, Garena-only domains */
-const SUPPORTED_DOMAINS = [
-  "authgop.garena.com",
-  "sso.garena.com",
-  "100082.connect.garena.com",
-  "100055.connect.garena.com",
-  "100054.connect.garena.com",
-  "auth.garena.com",
-  "account.garena.com",
-  "100072.connect.garena.com",
-  "com.garena.gaslite"
+const SUPPORTED_DOMAINS_FULL_URLS = [ // Renamed for clarity
+  "https://authgop.garena.com/",
+  "https://sso.garena.com/",
+  "https://100082.connect.garena.com/",
+  "https://100055.connect.garena.com/",
+  "https://100054.connect.garena.com/",
+  "https://auth.garena.com/",
+  "https://account.garena.com/",
+  "https://100072.connect.garena.com/",
+  "https://com.garena.gaslite/"
 ];
+
+// Extract just the hostnames for internal checks
+const SUPPORTED_DOMAINS = SUPPORTED_DOMAINS_FULL_URLS.map(url => {
+  try {
+    const u = new URL(url);
+    return u.hostname;
+  } catch (e) {
+    // Handle cases like "com.garena.gaslite" which are not valid URLs
+    // For these, we'll just return the original string as the "hostname"
+    // This assumes "com.garena.gaslite" is treated as a hostname directly.
+    return url.replace(/^(https?:\/\/)?(www\.)?/, '').replace(/\/$/, '');
+  }
+});
 
 const $  = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
@@ -53,6 +66,7 @@ $('#processBtn').addEventListener('click', async () => {
   resultDiv.appendChild(progress);
 
   /* ---- parser state ---- */
+  // Use the extracted hostnames for credsByDomain initialization
   const credsByDomain = Object.fromEntries(SUPPORTED_DOMAINS.map(d => [d, []]));
   let invalid = 0;
   const seen = new Set();                 // dedupe
@@ -99,6 +113,7 @@ $('#processBtn').addEventListener('click', async () => {
           pass = fallback.decode(new TextEncoder().encode(pass));
         }
 
+        // This check now uses the 'SUPPORTED_DOMAINS' array which contains only hostnames
         if (!user || !pass || !SUPPORTED_DOMAINS.includes(host)) {
           invalid++; if (diag++ < 5) console.warn('Rejected →', line); continue;
         }
@@ -125,6 +140,7 @@ $('#processBtn').addEventListener('click', async () => {
       host = host.trim().toLowerCase();
       user = user.trim();
       pass = pass.trim();
+      // This check also uses the 'SUPPORTED_DOMAINS' array
       if (user && pass && SUPPORTED_DOMAINS.includes(host)) {
         const key = `${host}:${user}:${pass}`;
         if (!seen.has(key)) {
@@ -138,6 +154,7 @@ $('#processBtn').addEventListener('click', async () => {
   killBar();
 
   /* ---- UI rebuild (same as before) ---- */
+  // Use the extracted hostnames for filtering active domains
   const activeDomains = SUPPORTED_DOMAINS.filter(d => credsByDomain[d].length);
   if (!activeDomains.length) {
     resultDiv.innerHTML = `<p class="text-red-500">No valid credentials found.<br>Check console for rejected lines.</p>`;
@@ -172,7 +189,7 @@ $('#processBtn').addEventListener('click', async () => {
     const cb = document.createElement('input');
     cb.type = 'checkbox';
     cb.checked = true;
-    cb.value = domain;
+    cb.value = domain; // The value of the checkbox is the hostname
     cb.className = 'domain-checkbox w-5 h-5 accent-blue-600';
     label.append(cb, `${domain} (${credsByDomain[domain].length})`);
     checkDiv.appendChild(label);
